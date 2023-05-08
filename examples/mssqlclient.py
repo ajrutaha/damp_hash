@@ -23,6 +23,10 @@ import argparse
 import sys
 import os
 import logging
+import hashlib
+import tqdm
+import base64
+from time import sleep
 
 from impacket.examples import logger
 from impacket.examples.utils import parse_target
@@ -61,6 +65,7 @@ if __name__ == '__main__':
      ! {cmd}                    - executes a local shell cmd
      show_query                 - show query
      mask_query                 - mask query
+     upload {path_from} {path_where}    - please use with double quotes
      """)
 
         def postcmd(self, stop, line):
@@ -164,7 +169,38 @@ if __name__ == '__main__':
                 print(os.getcwd())
             else:
                 os.chdir(s)
-
+                
+        def do_upload(self,line):
+            try:
+                BUFFER_SIZE = 5*1024
+                local_path=line.split('"')[1]
+                remote_path=line.split('"')[3]
+                print ("local_path: {} remote_path: {}".format(local_path,remote_path))
+                with open(local_path, 'rb') as f:
+                    data = f.read()
+                    md5sum = hashlib.md5(data).hexdigest()
+                    b64enc_data = b"".join(base64.b64encode(data).split()).decode()
+                print("[*] Data length (b64-encoded): "+str(len(b64enc_data)/1024)+"KB with MD5: "+str(md5sum))
+                for i in tqdm.tqdm(range(0, len(b64enc_data), BUFFER_SIZE), unit_scale=BUFFER_SIZE/1024, unit="KB"):
+                    cmd = 'echo '+b64enc_data[i:i+BUFFER_SIZE]+' >> "' + remote_path + '.b64"'
+                    self.sql.sql_query("EXEC xp_cmdshell '"+cmd+"'")
+                cmd = 'certutil -decode "' + remote_path + '.b64" "' + remote_path + '"'
+                self.sql.sql_query("EXEC xp_cmdshell '"+cmd+"'")
+                print("[*] "+cmd)
+                cmd = 'del "' + remote_path + '.b64"'
+                cmd=cmd.replace("\\\\","\\")
+                print("[*] "+cmd)
+                self.sql.sql_query("EXEC xp_cmdshell '"+cmd+"'")
+                cmd = 'certutil -hashfile "' + remote_path + '" MD5'
+                result=self.sql.sql_query("EXEC xp_cmdshell '"+cmd+"'")
+                md5sum_uploaded=result[1].get('output').replace(" ","")
+                if md5sum==md5sum_uploaded:
+                    print("[+] MD5 hashes match\n[*] In windows: {} in linux: {}".format(md5sum,md5sum_uploaded))
+                else:
+                    print("ERROR! MD5 hashes do NOT match!")
+            except:
+                pass
+            
         def do_enable_xp_cmdshell(self, line):
             try:
                 self.sql_query("exec master.dbo.sp_configure 'show advanced options',1;RECONFIGURE;"
